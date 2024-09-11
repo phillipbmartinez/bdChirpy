@@ -9,11 +9,15 @@ func main() {
 	// Create a new http.ServeMux
 	mux := http.NewServeMux();
 
-	// Use http.FileServer to serve files from the current directory
-	fileServer := http.FileServer(http.Dir("."))
+	/// Handle the root path to serve index.html
+    mux.Handle("/", http.FileServer(http.Dir(".")))
 
-	// Add a handler for the root path
-	mux.Handle("/", fileServer)
+	// Create a file server for the 'assets' directory
+	assetsDir := http.Dir("assets")
+	fileServer := http.FileServer(assetsDir)
+
+	// Handle requests to /assets/ with the file server
+    mux.Handle("/assets/", http.StripPrefix("/assets/", fileServer))
 
 	// Create a new http.Server struct
 	server := &http.Server{
