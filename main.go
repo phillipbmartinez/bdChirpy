@@ -1,19 +1,44 @@
 package main
 
 import (
-	"net/http"
-	"log"
+    "fmt"
+    "log"
+    "net/http"
 )
 
-// readinessHandler handles requests to /healthz
-func readinessHandler(w http.ResponseWriter, r *http.Request) {
-    // Set the Content-Type header
+type apiConfig struct {
+    fileserverHits int
+}
+
+func (cfg *apiConfig) middlewareMetricsInc(next http.Handler) http.Handler {
+    return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+        cfg.fileserverHits++
+        next.ServeHTTP(w, r)
+    })
+}
+
+func (cfg *apiConfig) handleMetrics(w http.ResponseWriter, r *http.Request) {
     w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-
-    // Set the status code to 200 OK
     w.WriteHeader(http.StatusOK)
+    _, err := w.Write([]byte(fmt.Sprintf("Hits: %d", cfg.fileserverHits)))
+    if err != nil {
+        log.Printf("Error writing response: %v", err)
+    }
+}
 
-    // Write the body text
+func (cfg *apiConfig) handleReset(w http.ResponseWriter, r *http.Request) {
+    cfg.fileserverHits = 0
+    w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+    w.WriteHeader(http.StatusOK)
+    _, err := w.Write([]byte("Hits reset"))
+    if err != nil {
+        log.Printf("Error writing response: %v", err)
+    }
+}
+
+func handlerReadiness(w http.ResponseWriter, r *http.Request) {
+    w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+    w.WriteHeader(http.StatusOK)
     _, err := w.Write([]byte("OK"))
     if err != nil {
         log.Printf("Error writing response: %v", err)
@@ -21,34 +46,31 @@ func readinessHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func main() {
-	// Create a new http.ServeMux
-	mux := http.NewServeMux();
+    const filepathRoot = "."
+    const port = "8080"
 
-	// Register the readiness endpoint
-    mux.HandleFunc("/healthz", readinessHandler)
+    apiCfg := &apiConfig{}
 
-	// Create a file server for the root directory
-    fileServer := http.FileServer(http.Dir("."))
+    mux := http.NewServeMux()
 
-	// Handle requests to /app/ with the file server
-    mux.Handle("/app/", http.StripPrefix("/app/", fileServer))
+    // Serve files from the root directory under /app/ path
+    fileServer := http.FileServer(http.Dir(filepathRoot))
+    mux.Handle("/app/", apiCfg.middlewareMetricsInc(http.StripPrefix("/app/", fileServer)))
 
-	// Create a file server for the 'assets' directory
-	assetsDir := http.Dir("assets")
-	assetsFileServer := http.FileServer(assetsDir)
+    // Register the readiness handler
+    mux.HandleFunc("/healthz", handlerReadiness)
+    
+    // Register the metrics handler
+    mux.HandleFunc("/metrics", apiCfg.handleMetrics)
+    
+    // Register the reset handler
+    mux.HandleFunc("/reset", apiCfg.handleReset)
 
-	// Handle requests to /app/assets/ with the assets file server
-    mux.Handle("/app/assets/", http.StripPrefix("/app/assets/", assetsFileServer))
+    srv := &http.Server{
+        Addr:    ":" + port,
+        Handler: mux,
+    }
 
-	// Create a new http.Server struct
-	server := &http.Server{
-		Addr: ":8080",
-		Handler: mux,
-	}
-
-	// Start the server
-	log.Println("Starting server on :8080")
-	if err := server.ListenAndServe(); err != nil {
-		log.Fatalf("Server failed: %v", err)
-	}
+    log.Printf("Serving files from %s on port: %s\n", filepathRoot, port)
+    log.Fatal(srv.ListenAndServe())
 }
